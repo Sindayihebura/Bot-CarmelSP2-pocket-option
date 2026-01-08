@@ -22,7 +22,7 @@ def run_server():
 threading.Thread(target=run_server, daemon=True).start()
 
 # --- 2. CONFIGURATION ---
-TOKEN = "8479698781:AAGSxcKisy5kb2FY4W1IBP_m34Ut5SVtg3I"
+TOKEN = "8479698781:AAECcBK1EaPGvwPEX_xjx4jRt7iVS7UCay8"
 
 # --- 3. ANALYSE SÉCURISÉE ---
 def get_signal(symbol):
@@ -89,3 +89,4 @@ if __name__ == '__main__':
     print("Bot démarré !")
     # drop_pending_updates=True élimine les erreurs de conflit au démarrage
     app.run_polling(drop_pending_updates=True)
+
