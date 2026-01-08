@@ -22,7 +22,7 @@ def run_server():
 threading.Thread(target=run_server, daemon=True).start()
 
 # --- 2. CONFIGURATION ---
-TOKEN = "8179698781:AA6SXcKisy5kb2FY4WT18P_m34UL5SVtg3I"
+TOKEN = "8479698781:AAGSxcKisy5kb2FY4W1IBP_m34Ut5SVtg3I"
 
 # --- 3. MOTEUR D'ANALYSE SÉCURISÉ ---
 def get_signal(symbol):
@@ -84,3 +84,4 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.run_polling()
+
