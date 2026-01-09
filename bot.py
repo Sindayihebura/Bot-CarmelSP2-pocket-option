@@ -1,110 +1,174 @@
 import os
+import threading
 import yfinance as yf
 import pandas_ta as ta
-import threading
-import math
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# --- SERVEUR DE MAINTIEN ---
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes
+)
+
+# ================= KEEP ALIVE =================
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b'Bot Carmel Final Ready')
+        self.wfile.write(b'Bot Carmel Running')
 
 def run_server():
-    port = int(os.environ.get('PORT', 8080))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
 threading.Thread(target=run_server, daemon=True).start()
 
-# --- CONFIG ---
+# ================= CONFIG =================
 TOKEN = "8479698781:AAECcBK1EaPGvwPEX_xjx4jRt7iVS7UCay8"
 
-# --- LOGIQUE D'ANALYSE ---
-def get_signal(symbol, timeframe):
-    try:
-        # Correspondance des timeframes pour yfinance
-        tf_map = {"1m": "1m", "5m": "5m", "15m": "15m"}
-        period_map = {"1m": "1d", "5m": "3d", "15m": "5d"}
-        
-        data = yf.download(symbol, period=period_map[timeframe], interval=tf_map[timeframe], progress=False)
-        
-        if data.empty or len(data) < 20:
-            return "❌ Données indisponibles pour ce délai."
-        
-        rsi = ta.rsi(data['Close'], length=14)
-        last_rsi = rsi.iloc[-1]
-        price = data['Close'].iloc[-1]
-        
-        expirations = {"1m": "2-3 min", "5m": "10-15 min", "15m": "30-45 min"}
-        reco_time = expirations[timeframe]
+CRYPTOS = [
+    "BTC-USD","ETH-USD","BNB-USD","SOL-USD","XRP-USD",
+    "ADA-USD","DOGE-USD","DOT-USD","MATIC-USD","LINK-USD",
+    "AVAX-USD","TRX-USD","LTC-USD","BCH-USD","UNI-USD",
+    "ATOM-USD","XLM-USD","ICP-USD","APT-USD","NEAR-USD"
+]
 
-        if last_rsi < 35:
-            res = f"🟢 **ACHAT (BUY)**\n💰 Prix: `{price:.4f}`\n📊 RSI: `{last_rsi:.2f}`\n⏱️ Exp: **{reco_time}**"
-        elif last_rsi > 65:
-            res = f"🔴 **VENTE (SELL)**\n💰 Prix: `{price:.4f}`\n📊 RSI: `{last_rsi:.2f}`\n⏱️ Exp: **{reco_time}**"
-        else:
-            res = f"⏳ **NEUTRE**\n💰 Prix: `{price:.4f}`\n📊 RSI: `{last_rsi:.2f}`\n📢 Attendre."
-        return res
-    except:
-        return "⚠️ Erreur de connexion."
+# ================= STRATEGIE =================
+def analyse(symbol, tf):
+    tf_map = {"1m": "1m", "5m": "5m", "15m": "15m"}
+    period_map = {"1m": "1d", "5m": "3d", "15m": "5d"}
 
-# --- MENUS ---
-def asset_menu():
-    keyboard = [
-        [InlineKeyboardButton("₿ BTC", callback_data='BTC-USD'), InlineKeyboardButton("💎 ETH", callback_data='ETH-USD')],
-        [InlineKeyboardButton("☀️ SOL", callback_data='SOL-USD'), InlineKeyboardButton("🔶 BNB", callback_data='BNB-USD')],
-        [InlineKeyboardButton("💧 XRP", callback_data='XRP-USD'), InlineKeyboardButton("🔹 ADA", callback_data='ADA-USD')],
-        [InlineKeyboardButton("🐕 DOGE", callback_data='DOGE-USD'), InlineKeyboardButton("🟣 DOT", callback_data='DOT1-USD')],
-        [InlineKeyboardButton("🔗 LINK", callback_data='LINK-USD'), InlineKeyboardButton("🚀 MATIC", callback_data='POL-USD')],
-        [InlineKeyboardButton("🇪🇺 EUR/USD", callback_data='EURUSD=X'), InlineKeyboardButton("🇬🇧 GBP/USD", callback_data='GBPUSD=X')],
-        [InlineKeyboardButton("🥇 GOLD", callback_data='GC=F'), InlineKeyboardButton("🛢️ OIL", callback_data='CL=F')],
-        [InlineKeyboardButton("🇺🇸 US30", callback_data='^DJI'), InlineKeyboardButton("📊 NASDAQ", callback_data='^IXIC')]
-    ]
+    df = yf.download(
+        symbol,
+        interval=tf_map[tf],
+        period=period_map[tf],
+        progress=False
+    )
+
+    if df.empty:
+        return "❌ Données indisponibles."
+
+    df["RSI"] = ta.rsi(df["Close"], length=14)
+    rsi = df["RSI"].iloc[-1]
+    price = df["Close"].iloc[-1]
+
+    if rsi < 35:
+        signal = "🟢 ACHAT"
+    elif rsi > 65:
+        signal = "🔴 VENTE"
+    else:
+        signal = "⏳ ATTENTE"
+
+    return price, rsi, signal
+
+# ================= MENUS =================
+def crypto_menu():
+    keyboard = []
+    for i in range(0, len(CRYPTOS), 2):
+        row = [InlineKeyboardButton(CRYPTOS[i], callback_data=CRYPTOS[i])]
+        if i + 1 < len(CRYPTOS):
+            row.append(InlineKeyboardButton(CRYPTOS[i+1], callback_data=CRYPTOS[i+1]))
+        keyboard.append(row)
     return InlineKeyboardMarkup(keyboard)
 
 def timeframe_menu(symbol):
-    keyboard = [
-        [InlineKeyboardButton("1 MINUTE", callback_data=f"tf_1m_{symbol}")],
-        [InlineKeyboardButton("5 MINUTES", callback_data=f"tf_5m_{symbol}")],
-        [InlineKeyboardButton("15 MINUTES", callback_data=f"tf_15m_{symbol}")],
-        [InlineKeyboardButton("🔙 Retour", callback_data="back_assets")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("1 MIN", callback_data=f"tf_1m_{symbol}")],
+        [InlineKeyboardButton("5 MIN", callback_data=f"tf_5m_{symbol}")],
+        [InlineKeyboardButton("15 MIN", callback_data=f"tf_15m_{symbol}")],
+    ])
 
-# --- GESTIONNAIRES ---
-async def start(update, context):
-    await update.message.reply_text("🚀 **CARMEL TRADING POCKET**\nChoisissez un actif :", reply_markup=asset_menu())
+def expiration_menu(symbol, tf):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏱ 1-2 min", callback_data=f"exp_2_{symbol}_{tf}")],
+        [InlineKeyboardButton("⏱ 3-5 min", callback_data=f"exp_5_{symbol}_{tf}")],
+        [InlineKeyboardButton("⏱ 10-15 min", callback_data=f"exp_15_{symbol}_{tf}")]
+    ])
 
-async def button_handler(update, context):
+# ================= COMMANDES =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🚀 BOT CARMEL SIGNALS\n\nChoisis une crypto :",
+        reply_markup=crypto_menu()
+    )
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📘 AIDE\n\n"
+        "Ce bot fournit des signaux basés sur RSI.\n"
+        "1️⃣ Choisis une crypto\n"
+        "2️⃣ Choisis le timeframe\n"
+        "3️⃣ Choisis le temps de mise\n\n"
+        "Commandes:\n"
+        "/start\n"
+        "/strategie\n"
+        "/risque"
+    )
+
+async def strategie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📊 STRATÉGIE\n\n"
+        "RSI 14\n"
+        "RSI < 35 : ACHAT\n"
+        "RSI > 65 : VENTE\n"
+        "Sinon : ATTENTE"
+    )
+
+async def risque(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "⚠️ GESTION DU RISQUE\n\n"
+        "• Toujours tester en compte démo\n"
+        "• 1 à 3 % par trade\n"
+        "• Aucun bot ne garantit des gains"
+    )
+
+# ================= BOUTONS =================
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    data = query.data
     await query.answer()
+    data = query.data
 
-    if data == "back_assets":
-        await query.edit_message_text("🚀 Choisissez un actif :", reply_markup=asset_menu())
-    
+    if data in CRYPTOS:
+        await query.edit_message_text(
+            f"⏱ Choisis le timeframe pour {data}",
+            reply_markup=timeframe_menu(data)
+        )
+
     elif data.startswith("tf_"):
-        # Format: tf_1m_BTC-USD
-        parts = data.split("_")
-        tf = parts[1]
-        symbol = parts[2]
-        await query.edit_message_text(f"🔍 Analyse de **{symbol}** en **{tf}**...")
-        result = get_signal(symbol, tf)
-        back_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Nouveau Scan", callback_data="back_assets")]])
-        await query.edit_message_text(f"📊 **RESULTAT {symbol} ({tf})**\n\n{result}", reply_markup=back_btn, parse_mode='Markdown')
+        _, tf, symbol = data.split("_")
+        await query.edit_message_text(
+            f"⌛ Choisis le temps de mise\nCrypto: {symbol}\nTF: {tf}",
+            reply_markup=expiration_menu(symbol, tf)
+        )
 
-    else:
-        # L'utilisateur a choisi l'actif, on demande le temps
-        symbol = data
-        await query.edit_message_text(f"⏱️ **{symbol}**\nChoisissez votre délai d'analyse :", reply_markup=timeframe_menu(symbol))
+    elif data.startswith("exp_"):
+        _, exp, symbol, tf = data.split("_")
+        price, rsi, signal = analyse(symbol, tf)
 
-if __name__ == '__main__':
+        await query.edit_message_text(
+            f"{signal}\n\n"
+            f"🪙 Actif : {symbol}\n"
+            f"💰 Prix : {price:.4f}\n"
+            f"📊 RSI : {rsi:.2f}\n"
+            f"⏱ Bougie : {tf}\n"
+            f"⌛ Mise : {exp} min"
+        )
+
+# ================= MAIN =================
+if __name__ == "__main__":
     app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("strategie", strategie))
+    app.add_handler(CommandHandler("risque", risque))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.run_polling(drop_pending_updates=True)
+
+    app.run_polling()
