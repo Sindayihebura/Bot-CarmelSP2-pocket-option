@@ -1,4 +1,5 @@
 import os
+import time
 import threading
 import pandas as pd
 import yfinance as yf
@@ -6,177 +7,170 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# ===================== SERVEUR KEEP ALIVE =====================
+# ================= KEEP ALIVE =================
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b'Carmel Trading Bot Online')
+        self.wfile.write(b"Carmel Bot Online")
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    server.serve_forever()
+    HTTPServer(("0.0.0.0", port), SimpleHandler).serve_forever()
 
 threading.Thread(target=run_server, daemon=True).start()
 
-# ===================== CONFIG =====================
-TOKEN = "8479698781:AAECcBK1EaPGvwPEX_xjx4jRt7iVS7UCay8"
+# ================= TOKEN =================
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("BOT_TOKEN manquant")
 
-# ===================== RSI SANS LIBRAIRIE =====================
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0).rolling(period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+# ================= USERS =================
+users = {}  # user_id : {"capital","start","active","signals_sent","last_signal_time"}
 
-# ===================== ANALYSE =====================
-def get_signal(symbol, timeframe):
-    tf_map = {"1m": "1m", "5m": "5m", "15m": "15m"}
-    period_map = {"1m": "1d", "5m": "3d", "15m": "7d"}
-
-    data = yf.download(
-        symbol,
-        interval=tf_map[timeframe],
-        period=period_map[timeframe],
-        progress=False
-    )
-
-    if data.empty or len(data) < 20:
-        return "❌ Données insuffisantes"
-
-    rsi = calculate_rsi(data["Close"])
-    last_rsi = rsi.iloc[-1]
-    price = data["Close"].iloc[-1]
-
-    if last_rsi < 30:
-        signal = "🟢 ACHAT (BUY)"
-    elif last_rsi > 70:
-        signal = "🔴 VENTE (SELL)"
-    else:
-        signal = "⏳ NEUTRE"
-
-    return (
-        f"{signal}\n\n"
-        f"💰 Prix : {price:.4f}\n"
-        f"📊 RSI : {last_rsi:.2f}"
-    )
-
-# ===================== MENUS =====================
+# ================= CRYPTOS =================
 CRYPTOS = {
     "BTC": "BTC-USD", "ETH": "ETH-USD", "BNB": "BNB-USD", "SOL": "SOL-USD",
     "XRP": "XRP-USD", "ADA": "ADA-USD", "DOGE": "DOGE-USD", "DOT": "DOT-USD",
-    "LINK": "LINK-USD", "AVAX": "AVAX-USD", "MATIC": "POL-USD", "LTC": "LTC-USD",
-    "TRX": "TRX-USD", "SHIB": "SHIB-USD", "ATOM": "ATOM-USD", "XLM": "XLM-USD",
-    "ICP": "ICP-USD", "APT": "APT-USD", "NEAR": "NEAR-USD", "FIL": "FIL-USD"
+    "LTC": "LTC-USD", "AVAX": "AVAX-USD", "LINK": "LINK-USD", "TRX": "TRX-USD"
 }
 
+# ================= INDICATEURS =================
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta>0,0).rolling(period).mean()
+    loss = -delta.where(delta<0,0).rolling(period).mean()
+    rs = gain/loss
+    return 100 - (100/(1+rs))
+
+def calculate_ema(series, period=50):
+    return series.ewm(span=period, adjust=False).mean()
+
+def calculate_macd(series, fast=12, slow=26, signal=9):
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line, signal_line
+
+def calculate_bollinger(series, period=20):
+    sma = series.rolling(period).mean()
+    std = series.rolling(period).std()
+    upper = sma + 2*std
+    lower = sma - 2*std
+    return upper, lower
+
+def calculate_atr(df, period=14):
+    high_low = df['High'] - df['Low']
+    high_close = (df['High'] - df['Close'].shift()).abs()
+    low_close = (df['Low'] - df['Close'].shift()).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+# ================= ANALYSE =================
+def get_signal(symbol):
+    try:
+        data = yf.download(symbol, interval="5m", period="7d", progress=False)
+        if data.empty or len(data)<20:
+            return "❌ Données insuffisantes"
+
+        close = data["Close"]
+        rsi = calculate_rsi(close).iloc[-1]
+        ema50 = calculate_ema(close,50).iloc[-1]
+        ema200 = calculate_ema(close,200).iloc[-1]
+        macd_line, signal_line = calculate_macd(close)
+        macd = macd_line.iloc[-1] - signal_line.iloc[-1]
+        upper, lower = calculate_bollinger(close)
+        price = close.iloc[-1]
+        atr = calculate_atr(data).iloc[-1]
+        volume = data["Volume"].iloc[-1]
+
+        # LOGIQUE SIGNAL
+        trend = "bull" if price>ema50 and price>ema200 else "bear"
+        signal = "⏳ NEUTRE"
+        if rsi<30 and trend=="bull" and macd>0 and price<lower:
+            signal = "🟢 ACHAT"
+        elif rsi>70 and trend=="bear" and macd<0 and price>upper:
+            signal = "🔴 VENTE"
+
+        return f"{signal}\n💰 Prix: {price:.4f}\n📊 RSI: {rsi:.2f}\n📈 Trend: {trend}\n📊 ATR: {atr:.4f}\n📊 Volume: {volume}"
+    except Exception as e:
+        return f"⚠️ Erreur analyse: {e}"
+
+# ================= MENU =================
 def crypto_menu():
-    keyboard = []
-    row = []
-    for name, symbol in CRYPTOS.items():
-        row.append(InlineKeyboardButton(name, callback_data=symbol))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    return InlineKeyboardMarkup(keyboard)
+    kb, row = [], []
+    for k, v in CRYPTOS.items():
+        row.append(InlineKeyboardButton(k, callback_data=v))
+        if len(row)==2:
+            kb.append(row)
+            row=[]
+    if row: kb.append(row)
+    return InlineKeyboardMarkup(kb)
 
-def timeframe_menu(symbol):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("1 MIN", callback_data=f"tf_1m_{symbol}")],
-        [InlineKeyboardButton("5 MIN", callback_data=f"tf_5m_{symbol}")],
-        [InlineKeyboardButton("15 MIN", callback_data=f"tf_15m_{symbol}")],
-        [InlineKeyboardButton("⬅ Retour", callback_data="back")]
-    ])
-
-# ===================== COMMANDES =====================
+# ================= COMMANDES =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 *CARMEL TRADING BOT*\n\nChoisis une crypto :",
-        reply_markup=crypto_menu(),
+        "🚀 *CARMEL TRADING BOT*\n\nEnvoie ton capital de départ (min 5 USDT)\nEx: 10",
         parse_mode="Markdown"
     )
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📘 *AIDE*\n\n"
-        "/start - Démarrer le bot\n"
-        "/strategie - Stratégie utilisée\n"
-        "/risque - Gestion du risque\n"
-        "/fonctionnement - Comment ça marche",
-        parse_mode="Markdown"
-    )
+async def capital(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        cap = float(update.message.text)
+        if cap<5:
+            await update.message.reply_text("❌ Minimum 5 USDT")
+            return
+        uid = update.effective_user.id
+        users[uid] = {"capital":cap,"start":cap,"active":True,
+                      "signals_sent":{crypto:0 for crypto in CRYPTOS.values()},
+                      "last_signal_time":{crypto:0 for crypto in CRYPTOS.values()}}
+        await update.message.reply_text("✅ Capital enregistré\nChoisis une crypto:", reply_markup=crypto_menu())
+    except:
+        await update.message.reply_text("❌ Veuillez envoyer un nombre valide")
 
-async def strategie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📊 *STRATÉGIE*\n\n"
-        "• RSI 14\n"
-        "• Achat < 30\n"
-        "• Vente > 70\n"
-        "• Confirmation par tendance",
-        parse_mode="Markdown"
-    )
+# ================= LOGIQUE SIGNAL =================
+def can_send_signal(user, crypto):
+    max_signaux = 5
+    intervalle = 24*3600 / max_signaux
+    last = user["last_signal_time"].get(crypto,0)
+    if time.time()-last < intervalle:
+        return False
+    if user["signals_sent"].get(crypto,0)>=max_signaux:
+        return False
+    if not user["active"]:
+        return False
+    return True
 
-async def risque(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "⚠️ *RISQUE*\n\n"
-        "• Ne jamais miser plus de 5%\n"
-        "• Toujours attendre confirmation\n"
-        "• Le trading comporte des risques",
-        parse_mode="Markdown"
-    )
-
-async def fonctionnement(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "⚙️ *FONCTIONNEMENT*\n\n"
-        "1️⃣ Choisis une crypto\n"
-        "2️⃣ Choisis la bougie\n"
-        "3️⃣ Reçois le signal",
-        parse_mode="Markdown"
-    )
-
-# ===================== BOUTONS =====================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    uid = update.effective_user.id
     await query.answer()
-
-    if query.data == "back":
-        await query.edit_message_text("Choisis une crypto :", reply_markup=crypto_menu())
+    user = users.get(uid)
+    if not user:
+        await query.edit_message_text("⛔ Envoie ton capital d'abord (/start)")
         return
-
-    if query.data.startswith("tf_"):
-        _, tf, symbol = query.data.split("_")
-        result = get_signal(symbol, tf)
-        await query.edit_message_text(
-            f"📈 *Signal {symbol} ({tf})*\n\n{result}",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Nouveau scan", callback_data="back")]
-            ])
-        )
+    crypto = query.data
+    if not can_send_signal(user,crypto):
+        await query.edit_message_text(f"⏱ Pas encore de signal pour {crypto} ou max atteint")
         return
+    signal = get_signal(crypto)
+    # Protection capital fictif
+    if user["capital"]<=user["start"]*0.5:
+        user["active"]=False
+        await query.edit_message_text("⛔ STOP -50% atteint pour protection")
+        return
+    user["signals_sent"][crypto]+=1
+    user["last_signal_time"][crypto]=time.time()
+    await query.edit_message_text(f"📈 Signal {crypto}:\n\n{signal}")
 
-    await query.edit_message_text(
-        f"⏱ Choisis le délai pour {query.data}",
-        reply_markup=timeframe_menu(query.data)
-    )
-
-# ===================== MAIN =====================
+# ================= MAIN =================
 def main():
     app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("strategie", strategie))
-    app.add_handler(CommandHandler("risque", risque))
-    app.add_handler(CommandHandler("fonctionnement", fonctionnement))
+    app.add_handler(CommandHandler("start",start))
+    app.add_handler(CommandHandler("capital",capital))
     app.add_handler(CallbackQueryHandler(buttons))
-
     app.run_polling()
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
