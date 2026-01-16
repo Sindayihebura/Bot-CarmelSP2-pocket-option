@@ -23,7 +23,7 @@ threading.Thread(target=run_server, daemon=True).start()
 # ================= TOKEN =================
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    raise ValueError("BOT_TOKEN manquant")
+    raise ValueError("8479698781:AAGSxcKisy5kb2FY4W1IBP_m34Ut5SVtg3I")
 
 # ================= USERS =================
 users = {}  # user_id : {"capital","start","active","signals_sent","last_signal_time"}
@@ -174,3 +174,4 @@ def main():
 
 if __name__=="__main__":
     main()
+
