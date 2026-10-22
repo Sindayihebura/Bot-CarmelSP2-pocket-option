@@ -16,7 +16,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     level=os.getenv("LOG_LEVEL", "INFO"),
 )
-log = logging.getLogger("pocket-signal-bot")
+log = logging.getLogger("carmel-ai-bot")
 TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", "8080"))
 BASE_URL = "https://api.binance.com/api/v3/klines"
@@ -29,7 +29,7 @@ SYMBOLS = {
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = json.dumps({"status": "ok", "service": "pocket-signal-bot"}).encode()
+        body = json.dumps({"status": "ok", "service": "carmel-ai-bot"}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -151,7 +151,7 @@ def keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
-        "🤖 *Pocket Signal Bot*\n\n"
+        "🤖 *Carmel AI Bot*\n\n"
         "Choisis un actif pour analyser les dernières bougies clôturées. "
         "Les données viennent du marché spot Binance, pas du flux Pocket Option.\n\n"
         "Commandes : /signal BTC, /assets",
@@ -209,7 +209,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not TOKEN:
-        raise RuntimeError("Variable secrète BOT_TOKEN manquante. Configure-la dans l'hébergeur.")
+        raise RuntimeError("Variable secrète BOT_TOKEN manquante. Le bot doit être lancé avec un jeton configuré en secret.")
     start_health_server()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
