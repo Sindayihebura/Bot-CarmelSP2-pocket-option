@@ -207,6 +207,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await send_analysis(query.message, key)
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Log unexpected Telegram handler errors without exposing secrets to users."""
+    log.error("Unhandled Telegram update error", exc_info=context.error)
+
 def main():
     if not TOKEN:
         raise RuntimeError("Variable secrète BOT_TOKEN manquante. Le bot doit être lancé avec un jeton configuré en secret.")
@@ -216,8 +220,11 @@ def main():
     app.add_handler(CommandHandler("assets", assets))
     app.add_handler(CommandHandler("signal", signal_command))
     app.add_handler(CallbackQueryHandler(button_handler))
-    log.info("Bot started; interval=%s", INTERVAL)
-    app.run_polling(drop_pending_updates=True)
+    app.add_error_handler(error_handler)
+    log.info("Telegram bot polling starting; interval=%s", INTERVAL)
+    # Keep pending updates so a /start sent while the service is restarting
+    # is not silently discarded at startup.
+    app.run_polling(drop_pending_updates=False)
 
 if __name__ == "__main__":
     main()
